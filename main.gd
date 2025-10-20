@@ -1,423 +1,756 @@
-# main_new.gd - Полностью переработанная версия Bubble Shooter
+# main.gd - Полная переработка с нуля
 extends Node2D
 
-# Предзагрузка сцены пузыря
-const BUBBLE_SCENE = preload("res://bubble.tscn")
+const BUBBLE = preload("res://bubble.tscn")
+const BASE_RESOLUTION = Vector2(1280, 1136)
 
-# Константы игры
-const GRID_ROWS = 12
-const GRID_COLS = 9
-const BUBBLE_SIZE = 60.0
-const HEX_OFFSET = 0.866  # sqrt(3)/2 для гексагональной сетки
-const MIN_MATCH = 3
-const SHOOT_SPEED = 800.0
+var screen_size: Vector2
+var scale_factor: Vector2
+var BUBBLE_RADIUS: float
+var HEX_WIDTH: float
+var HEX_HEIGHT: float
+var COLS: int = 10
+var ROWS: int = 14
 
-# Цвета пузырей
-const BUBBLE_COLORS = [
-	Color.RED,
-	Color.GREEN,
-	Color.YELLOW,
-	Color.CYAN,
-	Color.MAGENTA,
-	Color.ORANGE
-]
-
-# Игровые переменные
-var grid = []  # 2D массив для хранения пузырей
-var current_bubble = null  # Текущий пузырь для стрельбы
-var next_bubble = null  # Следующий пузырь
-var is_shooting = false
+var grid = []
+var shooter_bubble = null
+var next_bubble = null
 var score = 0
+var is_shooting = false
 var game_over = false
+var lives = 3
+var high_score = 0
+var bubbles_shot = 0
+var total_matches = 0
+var best_combo = 0
+var consecutive_hits = 0
 
-# UI элементы
-var shooter_pos: Vector2
-var ui_layer: CanvasLayer
-var score_label: Label
-var game_over_label: Label
+var shooter
+var score_label
+var high_score_label
+var game_over_label
+var restart_button
+var ad_continue_button
+
 @onready var background: TextureRect = $Background
 
-func _ready():
-	print("Initializing Bubble Shooter...")
-	setup_game()
-	create_ui()
-	initialize_grid()
-	spawn_initial_bubbles()
-	create_shooter_bubble()
-	
-	# Подключаем обработчик изменения размера окна для адаптивности
-	get_viewport().size_changed.connect(_on_viewport_size_changed)
+const COLORS = [
+	Color.RED, 
+	Color.GREEN, 
+	Color.YELLOW, 
+	Color.MAGENTA, 
+	Color.ORANGE, 
+	Color(1, 0.5, 0.8)
+]
 
-func setup_game():
-	# Настройка размера окна и позиции стрелка
-	var screen_size = get_viewport().get_visible_rect().size
-	shooter_pos = Vector2(screen_size.x / 2, screen_size.y - 100)
+func _ready():
+	await get_tree().process_frame
 	
-	# Настраиваем фон для адаптивности
+	calculate_adaptive_sizes()
+	initialize_grid()
+	
+	var save_data = SaveManager.load_game()
+	if save_data:
+		load_game_state(save_data)
+	else:
+		spawn_initial_bubbles()
+	
+	setup_shooter()
+	setup_ui()
+	
+	spawn_shooter_bubble()
+	spawn_next_bubble()
+	
+	update_ui()
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	
+	var i18n = get_node_or_null("/root/I18nManager")
+	if i18n:
+		i18n.language_changed.connect(_on_language_changed)
+	
+	var game_api = get_node_or_null("/root/GameReadyAPI")
+	if game_api:
+		game_api.send_analytics_event("game_start", {"score": score})
+		game_api.ad_completed.connect(_on_ad_completed)
+		game_api.ad_failed.connect(_on_ad_failed)
+
+func calculate_adaptive_sizes():
+	screen_size = get_viewport_rect().size
+	scale_factor = screen_size / BASE_RESOLUTION
+	
+	var min_scale = min(scale_factor.x, scale_factor.y)
+	BUBBLE_RADIUS = 32 * min_scale
+	HEX_HEIGHT = BUBBLE_RADIUS * 2
+	HEX_WIDTH = sqrt(3) * BUBBLE_RADIUS
+	
+	COLS = max(8, int(screen_size.x / HEX_WIDTH))
+	ROWS = max(10, int((screen_size.y * 0.6) / (HEX_HEIGHT * 0.75)))
+	
+	print("Grid size: ", COLS, "x", ROWS)
+
+func _on_viewport_size_changed():
+	calculate_adaptive_sizes()
+	
+	# Обновляем размер фона для адаптивности
 	if background:
 		background.size = screen_size
 		background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-
-func create_ui():
-	# Создаем слой UI
-	ui_layer = CanvasLayer.new()
-	add_child(ui_layer)
 	
-	# Счет
-	score_label = Label.new()
-	score_label.text = "Score: 0"
-	score_label.position = Vector2(20, 20)
-	score_label.add_theme_font_size_override("font_size", 24)
-	score_label.add_theme_color_override("font_color", Color.WHITE)
-	ui_layer.add_child(score_label)
-	
-	# Game Over текст
-	game_over_label = Label.new()
-	game_over_label.text = "GAME OVER"
-	game_over_label.position = Vector2(get_viewport().get_visible_rect().size.x / 2 - 100, 
-									   get_viewport().get_visible_rect().size.y / 2)
-	game_over_label.add_theme_font_size_override("font_size", 48)
-	game_over_label.add_theme_color_override("font_color", Color.RED)
-	game_over_label.visible = false
-	ui_layer.add_child(game_over_label)
+	reposition_all_bubbles()
+	reposition_ui()
 
 func initialize_grid():
-	# Создаем пустую сетку
 	grid = []
-	for row in range(GRID_ROWS):
-		var row_array = []
-		var cols = GRID_COLS - (row % 2)  # Четные ряды имеют на 1 пузырь меньше
-		for col in range(cols):
-			row_array.append(null)
-		grid.append(row_array)
-	print("Grid initialized: ", GRID_ROWS, "x", GRID_COLS)
+	for row in range(ROWS):
+		grid.append([])
+		for col in range(COLS):
+			grid[row].append(null)
 
 func spawn_initial_bubbles():
-	# Заполняем первые 5 рядов случайными пузырями
-	for row in range(min(5, GRID_ROWS)):
-		var cols = GRID_COLS - (row % 2)
-		for col in range(cols):
-			if randf() > 0.2:  # 80% шанс появления пузыря
-				var bubble = create_bubble_at(row, col)
-				if bubble:
-					bubble.color = BUBBLE_COLORS[randi() % BUBBLE_COLORS.size()]
-					bubble.update_appearance()
+	var rows_to_fill = min(5, ROWS - 1)
+	for row in range(rows_to_fill):
+		var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+		for col in range(cols_in_row):
+			if randf() < 0.7:
+				spawn_bubble_at(row, col)
 
-func create_bubble_at(row: int, col: int) -> Node2D:
-	# Проверка границ
-	if row < 0 or row >= GRID_ROWS:
-		print("ERROR: Row ", row, " out of bounds (0-", GRID_ROWS-1, ")")
-		return null
-		
-	var cols_in_row = GRID_COLS - (row % 2)
-	if col < 0 or col >= cols_in_row:
-		print("ERROR: Col ", col, " out of bounds for row ", row, " (0-", cols_in_row-1, ")")
+func spawn_bubble_at(row: int, col: int, color: Color = Color.WHITE):
+	if row < 0 or row >= ROWS or col < 0:
 		return null
 	
-	# Создаем пузырь
-	var bubble = BUBBLE_SCENE.instantiate()
+	var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+	if col >= cols_in_row:
+		return null
+	
+	var bubble = BUBBLE.instantiate()
 	add_child(bubble)
 	
-	# Устанавливаем позицию
 	var pos = get_grid_position(row, col)
 	bubble.position = pos
 	
-	# Сохраняем в сетке
-	grid[row][col] = bubble
+	if color == Color.WHITE:
+		bubble.set_color(COLORS[randi() % COLORS.size()])
+	else:
+		bubble.set_color(color)
+	
+	bubble.set_bubble_scale(BUBBLE_RADIUS / 64.0)
+	
+	if row < grid.size() and col < grid[row].size():
+		grid[row][col] = bubble
 	
 	return bubble
 
 func get_grid_position(row: int, col: int) -> Vector2:
-	# Вычисляем позицию для гексагональной сетки
-	var x_offset = (BUBBLE_SIZE / 2) if (row % 2 == 1) else 0
-	var x = col * BUBBLE_SIZE + x_offset + BUBBLE_SIZE
-	var y = row * BUBBLE_SIZE * HEX_OFFSET + BUBBLE_SIZE
+	var x_offset = (HEX_WIDTH / 2) if row % 2 == 1 else 0
+	var x = col * HEX_WIDTH + x_offset + HEX_WIDTH / 2 + 20
+	var y = row * (HEX_HEIGHT * 0.75) + HEX_HEIGHT / 2 + 100
 	return Vector2(x, y)
 
-func create_shooter_bubble():
-	# Создаем пузырь для стрельбы
-	if current_bubble:
-		current_bubble.queue_free()
+func grid_position_from_world(world_pos: Vector2) -> Vector2i:
+	var adjusted_y = world_pos.y - 100
+	var row = int(adjusted_y / (HEX_HEIGHT * 0.75))
+	row = clamp(row, 0, ROWS - 1)
 	
-	current_bubble = BUBBLE_SCENE.instantiate()
-	add_child(current_bubble)
-	current_bubble.position = shooter_pos
-	current_bubble.color = BUBBLE_COLORS[randi() % BUBBLE_COLORS.size()]
-	current_bubble.update_appearance()
-	current_bubble.is_shooter = true
+	var x_offset = (HEX_WIDTH / 2) if row % 2 == 1 else 0
+	var adjusted_x = world_pos.x - x_offset - 20
+	var col = int(adjusted_x / HEX_WIDTH)
 	
-	# Создаем следующий пузырь
+	var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+	col = clamp(col, 0, cols_in_row - 1)
+	
+	return Vector2i(row, col)
+
+func setup_shooter():
+	shooter = Node2D.new()
+	shooter.name = "Shooter"
+	shooter.position = Vector2(screen_size.x / 2, screen_size.y - 100)
+	add_child(shooter)
+
+func setup_ui():
+	var ui = CanvasLayer.new()
+	ui.name = "UI"
+	add_child(ui)
+	
+	var i18n = get_node_or_null("/root/I18nManager")
+	var min_scale = min(scale_factor.x, scale_factor.y)
+	
+	score_label = Label.new()
+	score_label.name = "ScoreLabel"
+	score_label.position = Vector2(20, 20)
+	score_label.add_theme_font_size_override("font_size", int(32 * min_scale))
+	score_label.add_theme_color_override("font_color", Color.WHITE)
+	ui.add_child(score_label)
+	
+	high_score_label = Label.new()
+	high_score_label.name = "HighScoreLabel"
+	high_score_label.position = Vector2(20, 60)
+	high_score_label.add_theme_font_size_override("font_size", int(24 * min_scale))
+	high_score_label.add_theme_color_override("font_color", Color.YELLOW)
+	ui.add_child(high_score_label)
+	
+	game_over_label = Label.new()
+	game_over_label.name = "GameOverLabel"
+	# Исправлено: замена тернарного оператора на if-else
+	var game_over_text: String
+	if i18n:
+		game_over_text = i18n.translate("game_over")
+	else:
+		game_over_text = "GAME OVER"
+	game_over_label.text = game_over_text
+	game_over_label.add_theme_font_size_override("font_size", int(48 * min_scale))
+	game_over_label.add_theme_color_override("font_color", Color.RED)
+	game_over_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	game_over_label.position = Vector2(screen_size.x / 2 - 200, screen_size.y / 2 - 50)
+	game_over_label.size = Vector2(400, 100)
+	game_over_label.visible = false
+	ui.add_child(game_over_label)
+	
+	restart_button = Button.new()
+	restart_button.name = "RestartButton"
+	# Исправлено: замена тернарного оператора на if-else
+	var restart_text: String
+	if i18n:
+		restart_text = i18n.translate("restart")
+	else:
+		restart_text = "Restart"
+	restart_button.text = restart_text
+	restart_button.position = Vector2(screen_size.x / 2 - 75, screen_size.y / 2 + 150)
+	restart_button.size = Vector2(150, 50)
+	restart_button.visible = false
+	restart_button.add_theme_font_size_override("font_size", int(24 * min_scale))
+	restart_button.pressed.connect(_on_restart_pressed)
+	ui.add_child(restart_button)
+	
+	ad_continue_button = Button.new()
+	ad_continue_button.name = "AdContinueButton"
+	# Исправлено: замена тернарного оператора на if-else
+	var continue_text: String
+	if i18n:
+		continue_text = i18n.translate("continue_ad")
+	else:
+		continue_text = "Continue (ad)"
+	ad_continue_button.text = continue_text
+	ad_continue_button.position = Vector2(screen_size.x / 2 - 100, screen_size.y / 2 + 100)
+	ad_continue_button.size = Vector2(200, 50)
+	ad_continue_button.visible = false
+	ad_continue_button.add_theme_font_size_override("font_size", int(20 * min_scale))
+	ad_continue_button.pressed.connect(_on_ad_continue_pressed)
+	ui.add_child(ad_continue_button)
+
+func spawn_shooter_bubble():
+	if shooter_bubble:
+		shooter_bubble.queue_free()
+	
+	shooter_bubble = BUBBLE.instantiate()
+	add_child(shooter_bubble)
+	shooter_bubble.position = shooter.position
+	shooter_bubble.set_color(COLORS[randi() % COLORS.size()])
+	shooter_bubble.is_shooter = true
+	shooter_bubble.set_bubble_scale(BUBBLE_RADIUS / 64.0)
+
+func spawn_next_bubble():
 	if next_bubble:
 		next_bubble.queue_free()
 	
-	next_bubble = BUBBLE_SCENE.instantiate()
+	next_bubble = BUBBLE.instantiate()
 	add_child(next_bubble)
-	next_bubble.position = shooter_pos + Vector2(100, 0)
-	next_bubble.color = BUBBLE_COLORS[randi() % BUBBLE_COLORS.size()]
-	next_bubble.update_appearance()
-	next_bubble.scale = Vector2(0.7, 0.7)
+	next_bubble.position = Vector2(shooter.position.x + 80, shooter.position.y)
+	next_bubble.set_color(COLORS[randi() % COLORS.size()])
+	next_bubble.set_bubble_scale(BUBBLE_RADIUS / 64.0 * 0.8)
 
 func _input(event):
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT and not is_shooting and not game_over:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if not is_shooting and not game_over and shooter_bubble:
 			shoot_bubble()
 
 func shoot_bubble():
-	if not current_bubble:
-		return
-	
 	is_shooting = true
-	
-	# Вычисляем направление к мыши
+	bubbles_shot += 1
 	var mouse_pos = get_global_mouse_position()
-	var direction = (mouse_pos - shooter_pos).normalized()
+	var direction = (mouse_pos - shooter.position).normalized()
 	
-	# Не позволяем стрелять вниз
-	if direction.y > -0.1:
-		direction.y = -0.1
-		direction = direction.normalized()
+	# Ограничиваем угол выстрела, чтобы не стрелять вниз
+	if direction.y > 0:
+		direction.y = -0.1  # Минимальный угол вверх
 	
-	# Запускаем пузырь
-	current_bubble.velocity = direction * SHOOT_SPEED
-	current_bubble.is_moving = true
+	shooter_bubble.shoot(direction)
 	
-	print("Shooting bubble in direction: ", direction)
+	var game_api = get_node_or_null("/root/GameReadyAPI")
+	if game_api and SettingsManager.vibration_enabled:
+		game_api.vibrate(50)
+	
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio:
+		audio.play_bubble_shoot()
 
-func _process(delta):
-	if not is_shooting or not current_bubble:
-		return
-	
-	# Проверяем столкновения со стенами
-	if current_bubble.position.x <= BUBBLE_SIZE / 2:
-		current_bubble.position.x = BUBBLE_SIZE / 2
-		current_bubble.velocity.x = abs(current_bubble.velocity.x)
+func _process(_delta):
+	if is_shooting and shooter_bubble:
+		check_bubble_collision()
+		check_wall_collision()
 		
-	if current_bubble.position.x >= get_viewport().get_visible_rect().size.x - BUBBLE_SIZE / 2:
-		current_bubble.position.x = get_viewport().get_visible_rect().size.x - BUBBLE_SIZE / 2
-		current_bubble.velocity.x = -abs(current_bubble.velocity.x)
+		# Проверяем, не улетел ли пузырь за пределы экрана
+		if shooter_bubble.position.y < -100:
+			reset_shooter_bubble()
+
+func reset_shooter_bubble():
+	# Если пузырь улетел за пределы, сбрасываем его
+	if shooter_bubble:
+		shooter_bubble.queue_free()
+		shooter_bubble = null
 	
-	# Проверяем достижение верхней границы
-	if current_bubble.position.y <= BUBBLE_SIZE:
-		attach_bubble()
+	is_shooting = false
+	spawn_shooter_bubble()
+
+func check_wall_collision():
+	if not shooter_bubble:
 		return
 	
-	# Проверяем столкновения с другими пузырями
-	for row in range(GRID_ROWS):
-		var cols = GRID_COLS - (row % 2)
-		for col in range(cols):
-			if grid[row][col] != null:
-				var distance = current_bubble.position.distance_to(grid[row][col].position)
-				if distance < BUBBLE_SIZE * 0.9:
-					print("Collision detected at row=", row, " col=", col, " distance=", distance)
-					attach_bubble()
+	if shooter_bubble.position.x - BUBBLE_RADIUS < 20:
+		shooter_bubble.velocity.x = abs(shooter_bubble.velocity.x)
+		shooter_bubble.position.x = 20 + BUBBLE_RADIUS
+	elif shooter_bubble.position.x + BUBBLE_RADIUS > screen_size.x - 20:
+		shooter_bubble.velocity.x = -abs(shooter_bubble.velocity.x)
+		shooter_bubble.position.x = screen_size.x - 20 - BUBBLE_RADIUS
+
+func check_bubble_collision():
+	if not shooter_bubble:
+		return
+	
+	# Проверка столкновения с верхней границей
+	if shooter_bubble.position.y - BUBBLE_RADIUS < 100:
+		snap_bubble_to_grid()
+		return
+	
+	# Проверка столкновения с другими пузырями
+	for row in range(ROWS):
+		var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+		for col in range(cols_in_row):
+			if row < grid.size() and col < grid[row].size() and grid[row][col]:
+				var distance = shooter_bubble.position.distance_to(grid[row][col].position)
+				if distance < BUBBLE_RADIUS * 1.9:  # Увеличили расстояние для лучшего определения столкновения
+					snap_bubble_to_grid()
 					return
 
-func attach_bubble():
-	if not current_bubble:
+func snap_bubble_to_grid():
+	if not shooter_bubble:
 		return
-		
-	print("Attaching bubble at position: ", current_bubble.position)
 	
-	# Останавливаем пузырь
-	current_bubble.is_moving = false
-	current_bubble.velocity = Vector2.ZERO
+	shooter_bubble.stop()
 	is_shooting = false
 	
-	# Находим ближайшую позицию в сетке
-	var best_row = -1
-	var best_col = -1
-	var min_distance = INF
+	var grid_pos = grid_position_from_world(shooter_bubble.position)
+	var row = grid_pos.x
+	var col = grid_pos.y
 	
-	for row in range(GRID_ROWS):
-		var cols = GRID_COLS - (row % 2)
-		for col in range(cols):
-			if grid[row][col] == null:
-				var grid_pos = get_grid_position(row, col)
-				var distance = current_bubble.position.distance_to(grid_pos)
-				if distance < min_distance:
-					min_distance = distance
-					best_row = row
-					best_col = col
-	
-	# Проверяем, нашли ли мы валидную позицию
-	if best_row == -1 or best_col == -1:
-		print("ERROR: Could not find valid grid position!")
-		game_over = true
-		show_game_over()
+	if row >= ROWS:
+		end_game()
 		return
 	
-	print("Placing bubble at grid position: row=", best_row, " col=", best_col)
-	
-	# Помещаем пузырь в сетку
-	current_bubble.position = get_grid_position(best_row, best_col)
-	grid[best_row][best_col] = current_bubble
-	
-	# Проверяем совпадения
-	var matches = find_matches(best_row, best_col, current_bubble.color)
-	if matches.size() >= MIN_MATCH:
-		print("Found ", matches.size(), " matches!")
-		remove_matches(matches)
-		score += matches.size() * 10
-		update_score()
-		
-		# Проверяем плавающие пузыри
-		check_floating_bubbles()
-	
-	# Проверяем конец игры
-	if best_row >= GRID_ROWS - 1:
-		game_over = true
-		show_game_over()
-		return
-	
-	# Создаем новый пузырь для стрельбы
-	current_bubble = next_bubble
-	if current_bubble:
-		current_bubble.position = shooter_pos
-		current_bubble.scale = Vector2(1, 1)
-		current_bubble.is_shooter = true
-	
-	create_shooter_bubble()
-
-func find_matches(start_row: int, start_col: int, color: Color) -> Array:
-	var matches = []
-	var checked = {}
-	var to_check = [[start_row, start_col]]
-	
-	while to_check.size() > 0:
-		var current = to_check.pop_back()
-		var row = current[0]
-		var col = current[1]
-		
-		var key = str(row) + "," + str(col)
-		if checked.has(key):
-			continue
-			
-		checked[key] = true
-		
-		# Проверяем границы
-		if row < 0 or row >= GRID_ROWS:
-			continue
-			
-		var cols_in_row = GRID_COLS - (row % 2)
-		if col < 0 or col >= cols_in_row:
-			continue
-			
-		# Проверяем существование и цвет пузыря
-		if grid[row][col] == null:
-			continue
-			
-		if not grid[row][col].color.is_equal_approx(color):
-			continue
-		
-		matches.append([row, col])
-		
-		# Добавляем соседей для проверки
-		var neighbors = get_neighbors(row, col)
+	# Находим ближайшую свободную позицию
+	if row < grid.size() and col < grid[row].size() and grid[row][col] != null:
+		var neighbors = get_hex_neighbors(row, col)
+		var found = false
 		for neighbor in neighbors:
-			to_check.append(neighbor)
+			var n_row = neighbor.x
+			var n_col = neighbor.y
+			if n_row >= 0 and n_row < ROWS:
+				var cols_in_row = COLS if n_row % 2 == 0 else COLS - 1
+				if n_col >= 0 and n_col < cols_in_row and grid[n_row][n_col] == null:
+					row = n_row
+					col = n_col
+					found = true
+					break
+		
+		if not found:
+			# Если не нашли соседей, ищем любую свободную позицию в верхних рядах
+			for r in range(ROWS):
+				var cols_in_r = COLS if r % 2 == 0 else COLS - 1
+				for c in range(cols_in_r):
+					if grid[r][c] == null:
+						row = r
+						col = c
+						found = true
+						break
+				if found:
+					break
 	
-	return matches
+	# Размещаем пузырь в сетке
+	if row < grid.size() and col < grid[row].size():
+		shooter_bubble.position = get_grid_position(row, col)
+		grid[row][col] = shooter_bubble
+		
+		var matches = find_matches(row, col, shooter_bubble.color)
+		if matches.size() >= 3:
+			remove_bubbles(matches)
+			score += matches.size() * 10
+			total_matches += 1
+			best_combo = max(best_combo, matches.size())
+			consecutive_hits += 1
+			
+			check_floating_bubbles()
+			check_achievements()
+			
+			var audio = get_node_or_null("/root/AudioManager")
+			if audio:
+				audio.play_match()
+			
+			var game_api = get_node_or_null("/root/GameReadyAPI")
+			if game_api:
+				if SettingsManager.vibration_enabled:
+					game_api.vibrate(100)
+				if matches.size() >= 5:
+					game_api.send_analytics_event("combo", {"size": matches.size()})
+		else:
+			consecutive_hits = 0
+	
+	# Переходим к следующему пузырю
+	shooter_bubble = next_bubble
+	if shooter_bubble:
+		shooter_bubble.position = shooter.position
+		shooter_bubble.set_bubble_scale(BUBBLE_RADIUS / 64.0)
+		shooter_bubble.is_shooter = true
+	
+	spawn_next_bubble()
+	update_ui()
+	check_win_condition()
+	SaveManager.save_game(get_save_data())
 
-func get_neighbors(row: int, col: int) -> Array:
+func get_hex_neighbors(row: int, col: int) -> Array:
 	var neighbors = []
+	var offsets = []
 	
-	# Для гексагональной сетки соседи зависят от четности ряда
 	if row % 2 == 0:
-		# Четный ряд
-		neighbors.append([row - 1, col - 1])
-		neighbors.append([row - 1, col])
-		neighbors.append([row, col - 1])
-		neighbors.append([row, col + 1])
-		neighbors.append([row + 1, col - 1])
-		neighbors.append([row + 1, col])
+		offsets = [
+			Vector2i(-1, -1), Vector2i(-1, 0),
+			Vector2i(0, -1), Vector2i(0, 1),
+			Vector2i(1, -1), Vector2i(1, 0)
+		]
 	else:
-		# Нечетный ряд
-		neighbors.append([row - 1, col])
-		neighbors.append([row - 1, col + 1])
-		neighbors.append([row, col - 1])
-		neighbors.append([row, col + 1])
-		neighbors.append([row + 1, col])
-		neighbors.append([row + 1, col + 1])
+		offsets = [
+			Vector2i(-1, 0), Vector2i(-1, 1),
+			Vector2i(0, -1), Vector2i(0, 1),
+			Vector2i(1, 0), Vector2i(1, 1)
+		]
+	
+	for offset in offsets:
+		var new_row = row + offset.x
+		var new_col = col + offset.y
+		if new_row >= 0 and new_row < ROWS:
+			var cols_in_row = COLS if new_row % 2 == 0 else COLS - 1
+			if new_col >= 0 and new_col < cols_in_row:
+				neighbors.append(Vector2i(new_row, new_col))
 	
 	return neighbors
 
-func remove_matches(matches: Array):
-	for match in matches:
-		var row = match[0]
-		var col = match[1]
-		if grid[row][col] != null:
-			grid[row][col].queue_free()
-			grid[row][col] = null
+func find_matches(row: int, col: int, color: Color) -> Array:
+	var matches = []
+	var visited = {}
+	var queue = [Vector2i(row, col)]
+	
+	while queue.size() > 0:
+		var current = queue.pop_front()
+		var key = str(current)
+		
+		if visited.has(key):
+			continue
+		visited[key] = true
+		
+		var r = current.x
+		var c = current.y
+		
+		if r < 0 or r >= ROWS:
+			continue
+		
+		var cols_in_row = COLS if r % 2 == 0 else COLS - 1
+		if c < 0 or c >= cols_in_row or grid[r][c] == null:
+			continue
+		
+		if grid[r][c].color.is_equal_approx(color):
+			matches.append(Vector2i(r, c))
+			for neighbor in get_hex_neighbors(r, c):
+				queue.append(neighbor)
+	
+	return matches
+
+func remove_bubbles(positions: Array):
+	for pos in positions:
+		var row = pos.x
+		var col = pos.y
+		if row < ROWS:
+			var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+			if col < cols_in_row and grid[row][col]:
+				grid[row][col].queue_free()
+				grid[row][col] = null
 
 func check_floating_bubbles():
-	# Помечаем все пузыри, соединенные с верхним рядом
 	var connected = {}
+	var queue = []
 	
-	# Начинаем с верхнего ряда
-	for col in range(GRID_COLS):
+	for col in range(COLS):
 		if grid[0][col] != null:
-			mark_connected(0, col, connected)
+			queue.append(Vector2i(0, col))
 	
-	# Удаляем все несоединенные пузыри
-	var floating_count = 0
-	for row in range(GRID_ROWS):
-		var cols = GRID_COLS - (row % 2)
-		for col in range(cols):
+	while queue.size() > 0:
+		var current = queue.pop_front()
+		var key = str(current)
+		
+		if connected.has(key):
+			continue
+		connected[key] = true
+		
+		for neighbor in get_hex_neighbors(current.x, current.y):
+			var n_row = neighbor.x
+			var n_col = neighbor.y
+			if n_row >= 0 and n_row < ROWS:
+				var cols_in_row = COLS if n_row % 2 == 0 else COLS - 1
+				if n_col >= 0 and n_col < cols_in_row and grid[n_row][n_col] != null:
+					queue.append(Vector2i(n_row, n_col))
+	
+	var floating = []
+	for row in range(ROWS):
+		var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+		for col in range(cols_in_row):
+			if grid[row][col] != null and not connected.has(str(Vector2i(row, col))):
+				floating.append(Vector2i(row, col))
+	
+	if floating.size() > 0:
+		remove_bubbles(floating)
+		score += floating.size() * 20
+
+func check_win_condition():
+	var has_bubbles = false
+	for row in range(ROWS):
+		var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+		for col in range(cols_in_row):
 			if grid[row][col] != null:
-				var key = str(row) + "," + str(col)
-				if not connected.has(key):
-					grid[row][col].queue_free()
-					grid[row][col] = null
-					floating_count += 1
+				has_bubbles = true
+				break
+		if has_bubbles:
+			break
 	
-	if floating_count > 0:
-		print("Removed ", floating_count, " floating bubbles")
-		score += floating_count * 20
-		update_score()
+	if not has_bubbles:
+		spawn_initial_bubbles()
+		score += 100
+		
+		var audio = get_node_or_null("/root/AudioManager")
+		if audio:
+			audio.play_win()
+		
+		var game_api = get_node_or_null("/root/GameReadyAPI")
+		if game_api:
+			game_api.send_analytics_event("level_complete", {"score": score})
 
-func mark_connected(row: int, col: int, connected: Dictionary):
-	var key = str(row) + "," + str(col)
-	if connected.has(key):
-		return
-		
-	if row < 0 or row >= GRID_ROWS:
-		return
-		
-	var cols_in_row = GRID_COLS - (row % 2)
-	if col < 0 or col >= cols_in_row:
-		return
-		
-	if grid[row][col] == null:
+func check_achievements():
+	var achievement_mgr = get_node_or_null("/root/AchievementManager")
+	if not achievement_mgr:
 		return
 	
-	connected[key] = true
+	if score >= 1000 and not achievement_mgr.is_unlocked("score_1000"):
+		achievement_mgr.unlock("score_1000")
+	if score >= 5000 and not achievement_mgr.is_unlocked("score_5000"):
+		achievement_mgr.unlock("score_5000")
 	
-	# Рекурсивно помечаем всех соседей
-	var neighbors = get_neighbors(row, col)
-	for neighbor in neighbors:
-		mark_connected(neighbor[0], neighbor[1], connected)
+	if total_matches >= 1 and not achievement_mgr.is_unlocked("first_win"):
+		achievement_mgr.unlock("first_win")
+	
+	if best_combo >= 5 and not achievement_mgr.is_unlocked("combo_master"):
+		achievement_mgr.unlock("combo_master")
+	
+	if bubbles_shot >= 100 and not achievement_mgr.is_unlocked("sharpshooter"):
+		achievement_mgr.unlock("sharpshooter")
+	
+	if consecutive_hits >= 50 and not achievement_mgr.is_unlocked("perfect_aim"):
+		achievement_mgr.unlock("perfect_aim")
 
-func update_score():
-	if score_label:
-		score_label.text = "Score: " + str(score)
+func update_leaderboard():
+	var leaderboard_mgr = get_node_or_null("/root/LeaderboardManager")
+	if leaderboard_mgr:
+		leaderboard_mgr.submit_score(score)
 
-func show_game_over():
-	if game_over_label:
+func end_game():
+	var i18n = get_node_or_null("/root/I18nManager")
+	
+	if lives > 0:
+		var continue_text: String
+		var lives_text: String
+		
+		if i18n:
+			continue_text = i18n.translate("continue_question")
+			lives_text = i18n.translate("lives_left")
+		else:
+			continue_text = "CONTINUE?"
+			lives_text = "Lives left: "
+			
+		game_over_label.text = continue_text + "\n" + lives_text + str(lives)
 		game_over_label.visible = true
-	print("Game Over! Final score: ", score)
+		ad_continue_button.visible = true
+		restart_button.visible = true
+	else:
+		game_over = true
+		var game_over_text: String
+		if i18n:
+			game_over_text = i18n.translate("game_over_score")
+		else:
+			game_over_text = "GAME OVER! Score: "
+			
+		game_over_label.text = game_over_text + str(score)
+		game_over_label.visible = true
+		restart_button.visible = true
+		ad_continue_button.visible = false
+		
+		if score > high_score:
+			high_score = score
+			update_leaderboard()
+		
+		var audio = get_node_or_null("/root/AudioManager")
+		if audio:
+			audio.play_lose()
+		
+		var game_api = get_node_or_null("/root/GameReadyAPI")
+		if game_api:
+			game_api.send_analytics_event("game_over", {"score": score, "lives": lives})
 
-func _on_restart_button_pressed():
+func _on_restart_pressed():
 	get_tree().reload_current_scene()
 
-func _on_viewport_size_changed():
-	# Обновляем размер фона при изменении размера окна
-	var screen_size = get_viewport().get_visible_rect().size
-	if background:
-		background.size = screen_size
+func _on_ad_continue_pressed():
+	var game_api = get_node_or_null("/root/GameReadyAPI")
+	var audio = get_node_or_null("/root/AudioManager")
+	var i18n = get_node_or_null("/root/I18nManager")
 	
-	# Обновляем позицию стрелка
-	shooter_pos = Vector2(screen_size.x / 2, screen_size.y - 100)
-	if current_bubble and not is_shooting:
-		current_bubble.position = shooter_pos
+	if audio:
+		audio.stop_music()
+	
+	if game_api:
+		ad_continue_button.disabled = true
+		if i18n:
+			ad_continue_button.text = i18n.translate("ad_loading")
+		else:
+			ad_continue_button.text = "Loading ad..."
+		
+		game_api.show_rewarded_ad()
+	else:
+		_on_rewarded_ad_completed()
+
+func _on_ad_completed():
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and SettingsManager.music_enabled:
+		audio.play_music()
+
+func _on_ad_failed():
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and SettingsManager.music_enabled:
+		audio.play_music()
+	
+	ad_continue_button.disabled = false
+	var i18n = get_node_or_null("/root/I18nManager")
+	if i18n:
+		ad_continue_button.text = i18n.translate("continue_ad")
+	else:
+		ad_continue_button.text = "Continue (ad)"
+
+func _on_rewarded_ad_completed():
+	lives -= 1
+	game_over_label.visible = false
+	ad_continue_button.visible = false
+	restart_button.visible = false
+	ad_continue_button.disabled = false
+	
+	var i18n = get_node_or_null("/root/I18nManager")
+	if i18n:
+		ad_continue_button.text = i18n.translate("continue_ad")
+	else:
+		ad_continue_button.text = "Continue (ad)"
+	
+	for row in range(max(0, ROWS - 3), ROWS):
+		var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+		for col in range(cols_in_row):
+			if row < grid.size() and col < grid[row].size() and grid[row][col]:
+				grid[row][col].queue_free()
+				grid[row][col] = null
+	
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and SettingsManager.music_enabled:
+		audio.play_music()
+	
+	update_ui()
+
+func update_ui():
+	var i18n = get_node_or_null("/root/I18nManager")
+	if score_label:
+		var score_text: String
+		if i18n:
+			score_text = i18n.translate("score")
+		else:
+			score_text = "Score"
+		score_label.text = score_text + ": " + str(score)
+	if high_score_label:
+		high_score_label.text = "Best: " + str(high_score)
+
+func _on_language_changed(_new_language: String):
+	update_ui()
+
+func reposition_all_bubbles():
+	for row in range(ROWS):
+		var cols_in_row = COLS if row % 2 == 0 else COLS - 1
+		for col in range(cols_in_row):
+			if row < grid.size() and col < grid[row].size() and grid[row][col]:
+				grid[row][col].position = get_grid_position(row, col)
+				grid[row][col].set_bubble_scale(BUBBLE_RADIUS / 64.0)
+	
+	if shooter:
+		shooter.position = Vector2(screen_size.x / 2, screen_size.y - 100)
+	
+	if shooter_bubble:
+		shooter_bubble.position = shooter.position
+		shooter_bubble.set_bubble_scale(BUBBLE_RADIUS / 64.0)
+	
 	if next_bubble:
-		next_bubble.position = shooter_pos + Vector2(100, 0)
+		next_bubble.position = Vector2(shooter.position.x + 80, shooter.position.y)
+		next_bubble.set_bubble_scale(BUBBLE_RADIUS / 64.0 * 0.8)
+
+func reposition_ui():
+	if score_label:
+		score_label.position = Vector2(20, 20)
+	if high_score_label:
+		high_score_label.position = Vector2(20, 60)
+	if game_over_label:
+		game_over_label.position = Vector2(screen_size.x / 2 - 200, screen_size.y / 2 - 50)
+	if restart_button:
+		restart_button.position = Vector2(screen_size.x / 2 - 75, screen_size.y / 2 + 150)
+	if ad_continue_button:
+		ad_continue_button.position = Vector2(screen_size.x / 2 - 100, screen_size.y / 2 + 100)
+
+func get_save_data() -> Dictionary:
+	return {
+		"score": score,
+		"high_score": high_score,
+		"lives": lives,
+		"bubbles_shot": bubbles_shot,
+		"total_matches": total_matches,
+		"best_combo": best_combo,
+		"consecutive_hits": consecutive_hits
+	}
+
+func load_game_state(save_data: Dictionary):
+	score = save_data.get("score", 0)
+	high_score = save_data.get("high_score", 0)
+	lives = save_data.get("lives", 3)
+	bubbles_shot = save_data.get("bubbles_shot", 0)
+	total_matches = save_data.get("total_matches", 0)
+	best_combo = save_data.get("best_combo", 0)
+	consecutive_hits = save_data.get("consecutive_hits", 0)
+
+func _on_leaderboard_pressed():
+	get_tree().change_scene_to_file("res://leaderboard.tscn")
+	
+	var game_api = get_node_or_null("/root/GameReadyAPI")
+	if game_api:
+		game_api.send_analytics_event("leaderboard_opened")
+
+func _on_achievements_pressed():
+	get_tree().change_scene_to_file("res://achievements.tscn")
+	
+	var game_api = get_node_or_null("/root/GameReadyAPI")
+	if game_api:
+		game_api.send_analytics_event("achievements_opened")

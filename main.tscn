@@ -1,7 +1,6 @@
-[gd_scene load_steps=6 format=3 uid="uid://c28in8y5673p3"]
+[gd_scene load_steps=5 format=3 uid="uid://c28in8y5673p3"]
 
 [ext_resource type="Script" uid="uid://y33qncjqmwk5" path="res://main.gd" id="1_ig7tw"]
-[ext_resource type="PackedScene" uid="uid://bsal7yc66w7p7" path="res://shooter.tscn" id="2_0xm2m"]
 [ext_resource type="Script" uid="uid://buj6ft1vvdf2f" path="res://addons/hexagon_tilemaplayer/hexagon_tilemaplayer.gd" id="2_1bvp3"]
 [ext_resource type="Texture2D" uid="uid://ck0qit7o4ioeb" path="res://assets/background/gamebg.png" id="2_h2yge"]
 [ext_resource type="TileSet" uid="uid://3ouonb4snaeu" path="res://hex_tile_set.tres" id="2_lquwl"]
@@ -22,9 +21,6 @@ offset_bottom = 1136.0
 texture = ExtResource("2_h2yge")
 stretch_mode = 6
 metadata/_edit_lock_ = true
-
-[node name="Shooter" parent="." instance=ExtResource("2_0xm2m")]
-position = Vector2(640, 1000)
 
 [node name="UI" type="CanvasLayer" parent="."]
 
