@@ -11,8 +11,7 @@ var scale_factor: Vector2
 @onready var back_button: Button
 @onready var title_label: Label
 @onready var progress_label: Label
-
-var bg: TextureRect
+@onready var bg: TextureRect = $TextureRect
 
 func _ready():
 	await get_tree().process_frame
@@ -34,19 +33,15 @@ func calculate_adaptive_sizes():
 
 func _on_viewport_size_changed():
 	calculate_adaptive_sizes()
-	if bg:
-		bg.size = screen_size
+	setup_background()
 	reposition_ui()
 
 func setup_background():
-	bg = TextureRect.new()
-	bg.texture = load("res://assets/background/Mainmenubg.png")
-	bg.stretch_mode = TextureRect.STRETCH_SCALE
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.size = screen_size
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(bg)
-	move_child(bg, 0)
+	if bg:
+		# Обновляем размер фона для адаптивности
+		bg.size = screen_size
+		bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func setup_ui():
 	var _min_scale = min(scale_factor.x, scale_factor.y)  # Исправлено: добавлен префикс _

@@ -35,7 +35,7 @@ var shooter_pos: Vector2
 var ui_layer: CanvasLayer
 var score_label: Label
 var game_over_label: Label
-var background: ColorRect
+@onready var background: TextureRect = $Background
 
 func _ready():
 	print("Initializing Bubble Shooter...")
@@ -44,19 +44,19 @@ func _ready():
 	initialize_grid()
 	spawn_initial_bubbles()
 	create_shooter_bubble()
+	
+	# Подключаем обработчик изменения размера окна для адаптивности
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
 func setup_game():
 	# Настройка размера окна и позиции стрелка
 	var screen_size = get_viewport().get_visible_rect().size
 	shooter_pos = Vector2(screen_size.x / 2, screen_size.y - 100)
 	
-	# Создаем фон
-	background = ColorRect.new()
-	background.color = Color(0.1, 0.1, 0.2)  # Темно-синий фон
-	background.size = screen_size
-	background.position = Vector2.ZERO
-	add_child(background)
-	move_child(background, 0)  # Помещаем фон на задний план
+	# Настраиваем фон для адаптивности
+	if background:
+		background.size = screen_size
+		background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 
 func create_ui():
 	# Создаем слой UI
@@ -408,3 +408,16 @@ func show_game_over():
 
 func _on_restart_button_pressed():
 	get_tree().reload_current_scene()
+
+func _on_viewport_size_changed():
+	# Обновляем размер фона при изменении размера окна
+	var screen_size = get_viewport().get_visible_rect().size
+	if background:
+		background.size = screen_size
+	
+	# Обновляем позицию стрелка
+	shooter_pos = Vector2(screen_size.x / 2, screen_size.y - 100)
+	if current_bubble and not is_shooting:
+		current_bubble.position = shooter_pos
+	if next_bubble:
+		next_bubble.position = shooter_pos + Vector2(100, 0)
