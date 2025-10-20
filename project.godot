@@ -30,8 +30,8 @@ LeaderboardManager="*res://leaderboard_manager.gd"
 window/size/viewport_width=1280
 window/size/viewport_height=1136
 window/size/mode=2
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
+window/stretch/mode="viewport"
+window/stretch/aspect="keep"
 window/handheld/orientation=1
 
 [editor_plugins]

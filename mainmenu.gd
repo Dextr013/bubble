@@ -13,8 +13,8 @@ var scale_factor: Vector2
 @onready var leaderboard_button = $VBoxContainer/LeaderboardButton
 @onready var achievements_button = $VBoxContainer/AchievementsButton
 @onready var quit_button = $VBoxContainer/QuitButton
+@onready var bg: TextureRect = $TextureRect
 
-var bg: TextureRect
 var title_label: Label
 
 func _ready():
@@ -60,20 +60,16 @@ func calculate_adaptive_sizes():
 func _on_viewport_size_changed():
 	calculate_adaptive_sizes()
 	position_ui_elements()
-	if bg:
-		bg.size = screen_size
+	setup_background()
 	if title_label:
 		position_title()
 
 func setup_background():
-	bg = TextureRect.new()
-	bg.texture = load("res://assets/background/Mainmenubg.png")
-	bg.stretch_mode = TextureRect.STRETCH_SCALE
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.size = screen_size
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(bg)
-	move_child(bg, 0)
+	if bg:
+		# Обновляем размер фона для адаптивности
+		bg.size = screen_size
+		bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func setup_title():
 	title_label = Label.new()
