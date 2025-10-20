@@ -1,0 +1,23 @@
+[gd_scene load_steps=3 format=3 uid="uid://c8br6pn01ouaq"]
+
+[ext_resource type="Script" uid="uid://dq12k2uralxc4" path="res://bubble.gd" id="1_n2mqj"]
+[ext_resource type="Texture2D" uid="uid://c1s12wx3twle5" path="res://assets/bubble/red.png" id="2_y2db8"]
+
+[node name="Bubble" type="Node2D"]
+script = ExtResource("1_n2mqj")
+
+[node name="ColorRect" type="ColorRect" parent="."]
+visible = false
+custom_minimum_size = Vector2(60, 60)
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -30.0
+offset_right = 30.0
+offset_bottom = 60.0
+grow_horizontal = 2
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+position = Vector2(76, 60)
+scale = Vector2(0.288288, 0.2575)
+texture = ExtResource("2_y2db8")

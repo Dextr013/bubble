@@ -1,0 +1,29 @@
+[gd_scene load_steps=2 format=3 uid="uid://dp8lelvack43t"]
+
+[ext_resource type="Script" uid="uid://c0ei4ru37ofrc" path="res://achievements.gd" id="1_nr1wc"]
+
+[node name="Control" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_nr1wc")
+
+[node name="ScrollContainer" type="ScrollContainer" parent="."]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="achievement_list" type="VBoxContainer" parent="ScrollContainer"]
+layout_mode = 2
+
+[node name="back_button" type="Button" parent="ScrollContainer/achievement_list"]
+layout_mode = 2
+
+[node name="title_label" type="Label" parent="ScrollContainer/achievement_list"]
+layout_mode = 2
+
+[node name="progress_label" type="Label" parent="ScrollContainer/achievement_list"]
+layout_mode = 2
